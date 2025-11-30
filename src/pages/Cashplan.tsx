@@ -10,10 +10,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { Plus, Trash2, BarChart3, TrendingUp, TrendingDown, Wallet, Copy, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, BarChart3, TrendingUp, TrendingDown, Wallet, Copy, ChevronDown, ChevronRight, GitCompare } from 'lucide-react';
 import { formatCurrency, getMonthName } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
+import { useNavigate } from 'react-router-dom';
+import ScenarioManager, { Scenario } from '@/components/ScenarioManager';
 
 interface BusinessCase {
   id: string;
@@ -40,12 +43,15 @@ interface CashPlanRow {
 }
 
 export default function Cashplan() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [businessCases, setBusinessCases] = useState<BusinessCase[]>([]);
   const [selectedBusinessCaseId, setSelectedBusinessCaseId] = useState<string>('');
   const [cashPlan, setCashPlan] = useState<CashPlan | null>(null);
   const [rows, setRows] = useState<CashPlanRow[]>([]);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(0);
   const [editingCell, setEditingCell] = useState<{ rowId: string; monthIndex: number } | null>(null);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
@@ -116,6 +122,9 @@ export default function Cashplan() {
 
       setCashPlan(planData);
 
+      // Load or create base scenario
+      await loadOrCreateBaseScenario(planData.id);
+
       const { data: rowsData, error: rowsError } = await supabase
         .from('cash_plan_rows')
         .select('*')
@@ -129,6 +138,91 @@ export default function Cashplan() {
       })));
     } catch (error: any) {
       toast.error('Fehler beim Laden des Cashplans');
+    }
+  }
+
+  async function loadOrCreateBaseScenario(cashPlanId: string) {
+    try {
+      // Load existing scenarios
+      const { data: scenariosData, error: scenariosError } = await supabase
+        .from('scenarios')
+        .select('*')
+        .eq('cash_plan_id', cashPlanId)
+        .order('created_at', { ascending: true });
+
+      if (scenariosError) throw scenariosError;
+
+      if (!scenariosData || scenariosData.length === 0) {
+        // Create base scenario if none exists
+        const { data: newScenario, error: createError } = await supabase
+          .from('scenarios')
+          .insert({
+            cash_plan_id: cashPlanId,
+            name: 'Basis-Szenario',
+            type: 'base',
+            parameters: {},
+          })
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        setScenarios([newScenario as Scenario]);
+        setSelectedScenarioId(newScenario.id);
+      } else {
+        setScenarios(scenariosData as Scenario[]);
+        setSelectedScenarioId(scenariosData[0].id);
+      }
+    } catch (error: any) {
+      toast.error('Fehler beim Laden der Szenarien');
+    }
+  }
+
+  async function handleScenarioCreate(scenario: Omit<Scenario, 'id'>) {
+    try {
+      const { data, error } = await supabase
+        .from('scenarios')
+        .insert(scenario)
+        .select()
+        .single();
+
+      if (error) throw error;
+      setScenarios([...scenarios, data as Scenario]);
+      toast.success('Szenario erstellt');
+    } catch (error: any) {
+      toast.error('Fehler beim Erstellen des Szenarios');
+    }
+  }
+
+  async function handleScenarioUpdate(scenarioId: string, updates: Partial<Scenario>) {
+    try {
+      const { error } = await supabase
+        .from('scenarios')
+        .update(updates)
+        .eq('id', scenarioId);
+
+      if (error) throw error;
+      setScenarios(scenarios.map(s => s.id === scenarioId ? { ...s, ...updates } : s));
+      toast.success('Szenario aktualisiert');
+    } catch (error: any) {
+      toast.error('Fehler beim Aktualisieren');
+    }
+  }
+
+  async function handleScenarioDelete(scenarioId: string) {
+    try {
+      const { error } = await supabase
+        .from('scenarios')
+        .delete()
+        .eq('id', scenarioId);
+
+      if (error) throw error;
+      setScenarios(scenarios.filter(s => s.id !== scenarioId));
+      if (selectedScenarioId === scenarioId) {
+        setSelectedScenarioId(scenarios[0]?.id || null);
+      }
+      toast.success('Szenario gelöscht');
+    } catch (error: any) {
+      toast.error('Fehler beim Löschen');
     }
   }
 
@@ -560,18 +654,28 @@ export default function Cashplan() {
                 )}
               </p>
             </div>
-            <div className="w-72">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Business Case</Label>
-              <Select value={selectedBusinessCaseId} onValueChange={setSelectedBusinessCaseId}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {businessCases.map(bc => (
-                    <SelectItem key={bc.id} value={bc.id}>{bc.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => navigate('/scenarios')}
+                className="gap-2"
+              >
+                <GitCompare className="h-4 w-4" />
+                Szenarien vergleichen
+              </Button>
+              <div className="w-72">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">Business Case</Label>
+                <Select value={selectedBusinessCaseId} onValueChange={setSelectedBusinessCaseId}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {businessCases.map(bc => (
+                      <SelectItem key={bc.id} value={bc.id}>{bc.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
 
@@ -645,11 +749,20 @@ export default function Cashplan() {
           </div>
         </div>
 
-        {/* Scrollable Table Area */}
-        <div className="flex-1 overflow-auto p-6">
-          <div className="inline-block min-w-full">
-            <div className="overflow-x-auto border rounded-lg bg-card shadow-sm">
-              <table className="w-full border-collapse">
+        {/* Scrollable Content Area */}
+        <div className="flex-1 overflow-auto">
+          <Tabs defaultValue="cashplan" className="h-full">
+            <div className="px-6 pt-4 border-b bg-background sticky top-0 z-30">
+              <TabsList>
+                <TabsTrigger value="cashplan">Cashplan-Tabelle</TabsTrigger>
+                <TabsTrigger value="scenarios">Szenarien</TabsTrigger>
+              </TabsList>
+            </div>
+
+            <TabsContent value="cashplan" className="p-6 space-y-6 mt-0">
+              <div className="inline-block min-w-full">
+                <div className="overflow-x-auto border rounded-lg bg-card shadow-sm">
+                  <table className="w-full border-collapse">
                 <thead className="sticky top-0 z-20 bg-muted/80 backdrop-blur-sm">
                   <tr>
                     <th className="sticky left-0 z-30 bg-muted/80 backdrop-blur-sm px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide border-b border-r text-muted-foreground">
@@ -723,12 +836,28 @@ export default function Cashplan() {
                       -
                     </td>
                   </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="scenarios" className="p-6 space-y-6 mt-0">
+            {cashPlan && (
+              <ScenarioManager
+                cashPlanId={cashPlan.id}
+                scenarios={scenarios}
+                selectedScenarioId={selectedScenarioId}
+                onScenarioSelect={setSelectedScenarioId}
+                onScenarioCreate={handleScenarioCreate}
+                onScenarioUpdate={handleScenarioUpdate}
+                onScenarioDelete={handleScenarioDelete}
+              />
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
-    </TooltipProvider>
-  );
+    </div>
+  </TooltipProvider>
+);
 }

@@ -199,6 +199,82 @@ export type Database = {
           },
         ]
       }
+      scenario_rows: {
+        Row: {
+          category: string
+          created_at: string
+          id: string
+          monthly_values: Json
+          name: string
+          scenario_id: string
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          id?: string
+          monthly_values?: Json
+          name: string
+          scenario_id: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          id?: string
+          monthly_values?: Json
+          name?: string
+          scenario_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scenario_rows_scenario_id_fkey"
+            columns: ["scenario_id"]
+            isOneToOne: false
+            referencedRelation: "scenarios"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scenarios: {
+        Row: {
+          cash_plan_id: string
+          created_at: string
+          id: string
+          name: string
+          parameters: Json
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          cash_plan_id: string
+          created_at?: string
+          id?: string
+          name: string
+          parameters?: Json
+          type: string
+          updated_at?: string
+        }
+        Update: {
+          cash_plan_id?: string
+          created_at?: string
+          id?: string
+          name?: string
+          parameters?: Json
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scenarios_cash_plan_id_fkey"
+            columns: ["cash_plan_id"]
+            isOneToOne: false
+            referencedRelation: "cash_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
