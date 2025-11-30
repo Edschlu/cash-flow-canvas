@@ -33,7 +33,8 @@ const navigation = [
   { name: 'Projekte', href: '/projects', icon: Folder },
   { name: 'Business Cases', href: '/business-cases', icon: FileText },
   { name: 'Cashplanung', href: '/cashplan', icon: BarChart3 },
-  { name: 'Analytics', href: '/analytics', icon: TrendingUp },
+  { name: 'Szenarien', href: '/scenarios', icon: TrendingUp },
+  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Einstellungen', href: '/settings', icon: Settings },
 ];
 
