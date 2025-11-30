@@ -22,7 +22,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { Plus, Package, ShoppingCart, Zap, Users, FileText, Layers } from 'lucide-react';
+import { Plus, Package, ShoppingCart, Zap, Users, FileText, Layers, BookOpen } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -53,6 +54,7 @@ interface BusinessCase {
 
 export default function BusinessCases() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [businessCases, setBusinessCases] = useState<BusinessCase[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -191,12 +193,21 @@ export default function BusinessCases() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-sm text-muted-foreground">
+                  <div className="text-sm text-muted-foreground mb-4">
                     <p>Projekt: {businessCase.projects.name}</p>
                     <Badge variant="outline" className="mt-2">
                       {businessCase.status === 'draft' ? 'Entwurf' : businessCase.status}
                     </Badge>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => navigate(`/memos/${businessCase.id}`)}
+                  >
+                    <BookOpen className="h-4 w-4 mr-2" />
+                    Strategiedokument
+                  </Button>
                 </CardContent>
               </Card>
             );
