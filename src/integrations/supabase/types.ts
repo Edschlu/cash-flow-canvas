@@ -137,6 +137,56 @@ export type Database = {
           },
         ]
       }
+      memos: {
+        Row: {
+          business_case_id: string
+          competition: string | null
+          created_at: string
+          finances: string | null
+          gtm: string | null
+          id: string
+          market: string | null
+          problem: string | null
+          risks: string | null
+          solution: string | null
+          updated_at: string
+        }
+        Insert: {
+          business_case_id: string
+          competition?: string | null
+          created_at?: string
+          finances?: string | null
+          gtm?: string | null
+          id?: string
+          market?: string | null
+          problem?: string | null
+          risks?: string | null
+          solution?: string | null
+          updated_at?: string
+        }
+        Update: {
+          business_case_id?: string
+          competition?: string | null
+          created_at?: string
+          finances?: string | null
+          gtm?: string | null
+          id?: string
+          market?: string | null
+          problem?: string | null
+          risks?: string | null
+          solution?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memos_business_case_id_fkey"
+            columns: ["business_case_id"]
+            isOneToOne: false
+            referencedRelation: "business_cases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null

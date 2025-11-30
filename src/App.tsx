@@ -20,6 +20,7 @@ import Cashplan from "./pages/Cashplan";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import ScenarioComparison from "./pages/ScenarioComparison";
+import Memos from "./pages/Memos";
 
 const queryClient = new QueryClient();
 
@@ -41,6 +42,7 @@ const App = () => (
             <Route path="/business-cases" element={<ProtectedRoute><AppLayout><BusinessCases /></AppLayout></ProtectedRoute>} />
             <Route path="/cashplan" element={<ProtectedRoute><AppLayout><Cashplan /></AppLayout></ProtectedRoute>} />
             <Route path="/scenarios" element={<ProtectedRoute><AppLayout><ScenarioComparison /></AppLayout></ProtectedRoute>} />
+            <Route path="/memos/:businessCaseId" element={<ProtectedRoute><AppLayout><Memos /></AppLayout></ProtectedRoute>} />
             <Route path="/analytics" element={<ProtectedRoute><AppLayout><Analytics /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             
