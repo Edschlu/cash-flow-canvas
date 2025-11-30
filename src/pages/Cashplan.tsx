@@ -8,8 +8,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { Plus, Trash2, BarChart3, TrendingUp, TrendingDown, Wallet } from 'lucide-react';
+import { Plus, Trash2, BarChart3, TrendingUp, TrendingDown, Wallet, Copy, ChevronDown, ChevronRight } from 'lucide-react';
 import { formatCurrency, getMonthName } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
 
@@ -46,7 +48,10 @@ export default function Cashplan() {
   const [rows, setRows] = useState<CashPlanRow[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(0);
   const [editingCell, setEditingCell] = useState<{ rowId: string; monthIndex: number } | null>(null);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [isSaving, setIsSaving] = useState(false);
   const cellRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadBusinessCases();
@@ -83,7 +88,6 @@ export default function Cashplan() {
     if (!selectedBusinessCaseId) return;
 
     try {
-      // Load existing cash plan
       const { data: planData, error: planError } = await supabase
         .from('cash_plans')
         .select('*')
@@ -93,7 +97,6 @@ export default function Cashplan() {
       if (planError && planError.code !== 'PGRST116') throw planError;
 
       if (!planData) {
-        // Create new cash plan if none exists
         const { data: newPlan, error: createError } = await supabase
           .from('cash_plans')
           .insert({
@@ -113,7 +116,6 @@ export default function Cashplan() {
 
       setCashPlan(planData);
 
-      // Load rows
       const { data: rowsData, error: rowsError } = await supabase
         .from('cash_plan_rows')
         .select('*')
@@ -181,38 +183,74 @@ export default function Cashplan() {
     }
   }
 
-  async function updateRowName(rowId: string, newName: string) {
+  async function duplicateRow(rowId: string) {
+    const row = rows.find(r => r.id === rowId);
+    if (!row || !cashPlan) return;
+
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('cash_plan_rows')
-        .update({ name: newName })
-        .eq('id', rowId);
+        .insert({
+          cash_plan_id: cashPlan.id,
+          category: row.category,
+          name: `${row.name} (Kopie)`,
+          sort_order: row.sort_order + 0.5,
+          monthly_values: row.monthly_values,
+        })
+        .select()
+        .single();
 
       if (error) throw error;
-      setRows(rows.map(r => r.id === rowId ? { ...r, name: newName } : r));
+      setRows([...rows, {
+        ...data,
+        monthly_values: Array.isArray(data.monthly_values) ? data.monthly_values as number[] : []
+      }]);
+      toast.success('Zeile dupliziert');
     } catch (error: any) {
-      toast.error('Fehler beim Speichern');
+      toast.error('Fehler beim Duplizieren');
     }
   }
 
-  async function updateCellValue(rowId: string, monthIndex: number, value: number) {
+  function updateRowName(rowId: string, newName: string) {
+    setRows(rows.map(r => r.id === rowId ? { ...r, name: newName } : r));
+    debouncedSave(rowId, 'name', newName);
+  }
+
+  function updateCellValue(rowId: string, monthIndex: number, value: number) {
     const row = rows.find(r => r.id === rowId);
     if (!row) return;
 
     const newValues = [...row.monthly_values];
     newValues[monthIndex] = value;
 
-    try {
-      const { error } = await supabase
-        .from('cash_plan_rows')
-        .update({ monthly_values: newValues })
-        .eq('id', rowId);
+    setRows(rows.map(r => r.id === rowId ? { ...r, monthly_values: newValues } : r));
+    debouncedSave(rowId, 'values', newValues);
+  }
 
-      if (error) throw error;
-      setRows(rows.map(r => r.id === rowId ? { ...r, monthly_values: newValues } : r));
-    } catch (error: any) {
-      toast.error('Fehler beim Speichern');
+  function debouncedSave(rowId: string, field: 'name' | 'values', value: any) {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
+
+    setIsSaving(true);
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const updateData = field === 'name' 
+          ? { name: value }
+          : { monthly_values: value };
+
+        const { error } = await supabase
+          .from('cash_plan_rows')
+          .update(updateData)
+          .eq('id', rowId);
+
+        if (error) throw error;
+      } catch (error: any) {
+        toast.error('Fehler beim Speichern');
+      } finally {
+        setIsSaving(false);
+      }
+    }, 800);
   }
 
   function handleCellKeyDown(e: KeyboardEvent<HTMLDivElement>, rowId: string, monthIndex: number) {
@@ -324,6 +362,20 @@ export default function Cashplan() {
     return Math.floor(currentBalance / Math.abs(avgMonthlyBurn));
   }
 
+  function calculateYearTotal(values: number[]): number {
+    return values.slice(0, 12).reduce((sum, val) => sum + val, 0);
+  }
+
+  function toggleCategory(category: string) {
+    const newCollapsed = new Set(collapsedCategories);
+    if (newCollapsed.has(category)) {
+      newCollapsed.delete(category);
+    } else {
+      newCollapsed.add(category);
+    }
+    setCollapsedCategories(newCollapsed);
+  }
+
   const getMonthDate = (monthOffset: number) => {
     if (!cashPlan) return new Date();
     const startDate = new Date(cashPlan.start_month);
@@ -365,501 +417,318 @@ export default function Cashplan() {
   const cashBalance = calculateCashBalance();
   const runway = calculateRunway();
 
+  const renderCategoryRows = (category: 'revenue' | 'cost' | 'headcount' | 'other', label: string, colorClass: string) => {
+    const categoryRows = rows.filter(r => r.category === category);
+    const isCollapsed = collapsedCategories.has(category);
+    const totals = calculateTotals(category);
+    const yearTotal = calculateYearTotal(totals);
+
+    return (
+      <>
+        <tr className={cn("border-t-2", colorClass)}>
+          <td className={cn("sticky left-0 z-10 px-4 py-3 font-semibold border-r", colorClass)}>
+            <div className="flex items-center justify-between gap-2">
+              <Collapsible open={!isCollapsed} onOpenChange={() => toggleCategory(category)}>
+                <CollapsibleTrigger className="flex items-center gap-2 hover:opacity-70 transition-opacity">
+                  {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  <span>{label}</span>
+                </CollapsibleTrigger>
+              </Collapsible>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => addRow(category)}
+                      className="h-7 w-7 p-0"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Zeile hinzufügen</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </td>
+          {Array.from({ length: 24 }, (_, i) => (
+            <td key={i} className="border-r border-border/40"></td>
+          ))}
+          <td className="border-l-2"></td>
+        </tr>
+
+        {!isCollapsed && categoryRows.map((row, idx) => (
+          <tr key={row.id} className={cn("transition-colors hover:bg-muted/30", idx % 2 === 0 ? 'bg-background' : 'bg-muted/20')}>
+            <td className="sticky left-0 z-10 bg-inherit px-2 py-1 border-r">
+              <div className="flex items-center gap-1">
+                <Input
+                  value={row.name}
+                  onChange={(e) => updateRowName(row.id, e.target.value)}
+                  className="h-8 text-sm border-0 bg-transparent focus-visible:ring-1 focus-visible:ring-primary/20"
+                />
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => duplicateRow(row.id)}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Duplizieren</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 className="h-3 w-3 text-destructive" />
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Zeile löschen?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Diese Aktion kann nicht rückgängig gemacht werden.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Abbrechen</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => deleteRow(row.id)}>
+                        Löschen
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </td>
+            {row.monthly_values.map((value, monthIdx) => (
+              <td key={monthIdx} className="border-r border-border/40 p-0 group">
+                <div
+                  ref={el => cellRefs.current[`${row.id}-${monthIdx}`] = el}
+                  contentEditable
+                  suppressContentEditableWarning
+                  onFocus={() => setEditingCell({ rowId: row.id, monthIndex: monthIdx })}
+                  onBlur={(e) => {
+                    const newValue = parseFloat(e.currentTarget.textContent || '0');
+                    updateCellValue(row.id, monthIdx, newValue);
+                  }}
+                  onKeyDown={(e) => handleCellKeyDown(e, row.id, monthIdx)}
+                  className="px-3 py-2 text-right text-sm cursor-text hover:bg-primary/5 focus:bg-primary/10 focus:outline-none focus:ring-1 focus:ring-primary/20 min-h-[36px] flex items-center justify-end transition-colors"
+                >
+                  {value.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </div>
+              </td>
+            ))}
+            <td className="px-3 py-2 text-right text-sm font-medium border-l-2 bg-muted/20">
+              {formatCurrency(calculateYearTotal(row.monthly_values))}
+            </td>
+          </tr>
+        ))}
+
+        <tr className={cn("font-semibold border-t", colorClass)}>
+          <td className={cn("sticky left-0 z-10 px-4 py-2 border-r", colorClass)}>
+            Gesamt {label}
+          </td>
+          {totals.map((total, idx) => (
+            <td key={idx} className="px-3 py-2 text-right text-sm border-r border-border/40">
+              {formatCurrency(total)}
+            </td>
+          ))}
+          <td className="px-3 py-2 text-right text-sm font-bold border-l-2 bg-muted/40">
+            {formatCurrency(yearTotal)}
+          </td>
+        </tr>
+      </>
+    );
+  };
+
   return (
-    <div className="h-full flex flex-col bg-background">
-      {/* Header */}
-      <div className="p-6 border-b bg-card">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-3xl font-bold">Cashplanung</h1>
-            <p className="text-muted-foreground">24-Monats-Finanzplanung mit Live-KPIs</p>
-          </div>
-          <div className="w-72">
-            <Label>Business Case</Label>
-            <Select value={selectedBusinessCaseId} onValueChange={setSelectedBusinessCaseId}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {businessCases.map(bc => (
-                  <SelectItem key={bc.id} value={bc.id}>{bc.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* KPI Bar */}
-        <div className="grid grid-cols-5 gap-4">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-muted-foreground">Umsatz</span>
-              </div>
-              <div className="text-2xl font-bold text-green-600">
-                {formatCurrency(revenueTotals[selectedMonth] || 0)}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingDown className="h-4 w-4 text-red-500" />
-                <span className="text-sm text-muted-foreground">Kosten</span>
-              </div>
-              <div className="text-2xl font-bold text-red-600">
-                {formatCurrency((costTotals[selectedMonth] || 0) + (headcountTotals[selectedMonth] || 0) + (otherTotals[selectedMonth] || 0))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <BarChart3 className="h-4 w-4 text-primary" />
-                <span className="text-sm text-muted-foreground">Net-Cashflow</span>
-              </div>
-              <div className={cn(
-                "text-2xl font-bold",
-                (netCashflow[selectedMonth] || 0) >= 0 ? "text-green-600" : "text-red-600"
-              )}>
-                {formatCurrency(netCashflow[selectedMonth] || 0)}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <Wallet className="h-4 w-4 text-blue-500" />
-                <span className="text-sm text-muted-foreground">Cash-Bestand</span>
-              </div>
-              <div className={cn(
-                "text-2xl font-bold",
-                (cashBalance[selectedMonth] || 0) >= 0 ? "text-blue-600" : "text-red-600"
-              )}>
-                {formatCurrency(cashBalance[selectedMonth] || 0)}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="h-4 w-4 text-orange-500" />
-                <span className="text-sm text-muted-foreground">Runway</span>
-              </div>
-              <div className="text-2xl font-bold text-orange-600">
-                {runway === Infinity ? '∞' : `${runway}M`}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="inline-block min-w-full">
-          <div className="overflow-x-auto border rounded-lg bg-card">
-            <table className="w-full border-collapse">
-              <thead className="sticky top-0 z-20 bg-muted/50 backdrop-blur">
-                <tr>
-                  <th className="sticky left-0 z-30 bg-muted/50 backdrop-blur px-4 py-3 text-left font-semibold border-b border-r">
-                    Kategorie / Zeile
-                  </th>
-                  {Array.from({ length: 24 }, (_, i) => {
-                    const date = getMonthDate(i);
-                    return (
-                      <th
-                        key={i}
-                        onClick={() => setSelectedMonth(i)}
-                        className={cn(
-                          "px-4 py-3 text-center font-semibold border-b cursor-pointer transition-colors min-w-[100px]",
-                          selectedMonth === i ? "bg-primary/10" : "hover:bg-muted"
-                        )}
-                      >
-                        <div className="text-xs text-muted-foreground">{date.getFullYear()}</div>
-                        <div>{getMonthName(date.getMonth())}</div>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-
-              <tbody>
-                {/* Revenue Section */}
-                <tr className="bg-green-50/50 dark:bg-green-950/20">
-                  <td className="sticky left-0 z-10 bg-green-50/50 dark:bg-green-950/20 px-4 py-3 font-semibold border-r">
-                    <div className="flex items-center justify-between">
-                      <span>Umsätze</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => addRow('revenue')}
-                        className="h-7"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </td>
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <td key={i} className="border-l"></td>
-                  ))}
-                </tr>
-
-                {rows.filter(r => r.category === 'revenue').map((row, idx) => (
-                  <tr key={row.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-4 py-2 border-r">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={row.name}
-                          onChange={(e) => updateRowName(row.id, e.target.value)}
-                          className="h-8 text-sm"
-                        />
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                              <Trash2 className="h-3 w-3 text-destructive" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Zeile löschen?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Diese Aktion kann nicht rückgängig gemacht werden.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteRow(row.id)}>
-                                Löschen
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </td>
-                    {row.monthly_values.map((value, monthIdx) => (
-                      <td key={monthIdx} className="border-l p-0">
-                        <div
-                          ref={el => cellRefs.current[`${row.id}-${monthIdx}`] = el}
-                          contentEditable
-                          suppressContentEditableWarning
-                          onFocus={() => setEditingCell({ rowId: row.id, monthIndex: monthIdx })}
-                          onBlur={(e) => {
-                            const newValue = parseFloat(e.currentTarget.textContent || '0');
-                            updateCellValue(row.id, monthIdx, newValue);
-                          }}
-                          onKeyDown={(e) => handleCellKeyDown(e, row.id, monthIdx)}
-                          className="px-4 py-2 text-right cursor-text hover:bg-muted/50 focus:bg-primary/5 focus:outline-none min-h-[40px] flex items-center justify-end"
-                        >
-                          {value.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-
-                <tr className="bg-green-100/50 dark:bg-green-900/20 font-semibold">
-                  <td className="sticky left-0 z-10 bg-green-100/50 dark:bg-green-900/20 px-4 py-2 border-r border-t">
-                    Gesamt Umsatz
-                  </td>
-                  {revenueTotals.map((total, idx) => (
-                    <td key={idx} className="px-4 py-2 text-right border-l border-t text-green-700 dark:text-green-400">
-                      {formatCurrency(total)}
-                    </td>
-                  ))}
-                </tr>
-
-                {/* Cost Section */}
-                <tr className="bg-red-50/50 dark:bg-red-950/20">
-                  <td className="sticky left-0 z-10 bg-red-50/50 dark:bg-red-950/20 px-4 py-3 font-semibold border-r border-t">
-                    <div className="flex items-center justify-between">
-                      <span>Kosten</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => addRow('cost')}
-                        className="h-7"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </td>
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <td key={i} className="border-l border-t"></td>
-                  ))}
-                </tr>
-
-                {rows.filter(r => r.category === 'cost').map((row, idx) => (
-                  <tr key={row.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-4 py-2 border-r">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={row.name}
-                          onChange={(e) => updateRowName(row.id, e.target.value)}
-                          className="h-8 text-sm"
-                        />
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                              <Trash2 className="h-3 w-3 text-destructive" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Zeile löschen?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Diese Aktion kann nicht rückgängig gemacht werden.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteRow(row.id)}>
-                                Löschen
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </td>
-                    {row.monthly_values.map((value, monthIdx) => (
-                      <td key={monthIdx} className="border-l p-0">
-                        <div
-                          ref={el => cellRefs.current[`${row.id}-${monthIdx}`] = el}
-                          contentEditable
-                          suppressContentEditableWarning
-                          onFocus={() => setEditingCell({ rowId: row.id, monthIndex: monthIdx })}
-                          onBlur={(e) => {
-                            const newValue = parseFloat(e.currentTarget.textContent || '0');
-                            updateCellValue(row.id, monthIdx, newValue);
-                          }}
-                          onKeyDown={(e) => handleCellKeyDown(e, row.id, monthIdx)}
-                          className="px-4 py-2 text-right cursor-text hover:bg-muted/50 focus:bg-primary/5 focus:outline-none min-h-[40px] flex items-center justify-end"
-                        >
-                          {value.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-
-                <tr className="bg-red-100/50 dark:bg-red-900/20 font-semibold">
-                  <td className="sticky left-0 z-10 bg-red-100/50 dark:bg-red-900/20 px-4 py-2 border-r border-t">
-                    Gesamt Kosten
-                  </td>
-                  {costTotals.map((total, idx) => (
-                    <td key={idx} className="px-4 py-2 text-right border-l border-t text-red-700 dark:text-red-400">
-                      {formatCurrency(total)}
-                    </td>
-                  ))}
-                </tr>
-
-                {/* Headcount Section */}
-                <tr className="bg-blue-50/50 dark:bg-blue-950/20">
-                  <td className="sticky left-0 z-10 bg-blue-50/50 dark:bg-blue-950/20 px-4 py-3 font-semibold border-r border-t">
-                    <div className="flex items-center justify-between">
-                      <span>Personal</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => addRow('headcount')}
-                        className="h-7"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </td>
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <td key={i} className="border-l border-t"></td>
-                  ))}
-                </tr>
-
-                {rows.filter(r => r.category === 'headcount').map((row, idx) => (
-                  <tr key={row.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-4 py-2 border-r">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={row.name}
-                          onChange={(e) => updateRowName(row.id, e.target.value)}
-                          className="h-8 text-sm"
-                        />
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                              <Trash2 className="h-3 w-3 text-destructive" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Zeile löschen?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Diese Aktion kann nicht rückgängig gemacht werden.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteRow(row.id)}>
-                                Löschen
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </td>
-                    {row.monthly_values.map((value, monthIdx) => (
-                      <td key={monthIdx} className="border-l p-0">
-                        <div
-                          ref={el => cellRefs.current[`${row.id}-${monthIdx}`] = el}
-                          contentEditable
-                          suppressContentEditableWarning
-                          onFocus={() => setEditingCell({ rowId: row.id, monthIndex: monthIdx })}
-                          onBlur={(e) => {
-                            const newValue = parseFloat(e.currentTarget.textContent || '0');
-                            updateCellValue(row.id, monthIdx, newValue);
-                          }}
-                          onKeyDown={(e) => handleCellKeyDown(e, row.id, monthIdx)}
-                          className="px-4 py-2 text-right cursor-text hover:bg-muted/50 focus:bg-primary/5 focus:outline-none min-h-[40px] flex items-center justify-end"
-                        >
-                          {value.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-
-                <tr className="bg-blue-100/50 dark:bg-blue-900/20 font-semibold">
-                  <td className="sticky left-0 z-10 bg-blue-100/50 dark:bg-blue-900/20 px-4 py-2 border-r border-t">
-                    Gesamt Personal
-                  </td>
-                  {headcountTotals.map((total, idx) => (
-                    <td key={idx} className="px-4 py-2 text-right border-l border-t text-blue-700 dark:text-blue-400">
-                      {formatCurrency(total)}
-                    </td>
-                  ))}
-                </tr>
-
-                {/* Other Section */}
-                <tr className="bg-gray-50/50 dark:bg-gray-950/20">
-                  <td className="sticky left-0 z-10 bg-gray-50/50 dark:bg-gray-950/20 px-4 py-3 font-semibold border-r border-t">
-                    <div className="flex items-center justify-between">
-                      <span>Sonstiges</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => addRow('other')}
-                        className="h-7"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </td>
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <td key={i} className="border-l border-t"></td>
-                  ))}
-                </tr>
-
-                {rows.filter(r => r.category === 'other').map((row, idx) => (
-                  <tr key={row.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-4 py-2 border-r">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={row.name}
-                          onChange={(e) => updateRowName(row.id, e.target.value)}
-                          className="h-8 text-sm"
-                        />
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                              <Trash2 className="h-3 w-3 text-destructive" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Zeile löschen?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Diese Aktion kann nicht rückgängig gemacht werden.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteRow(row.id)}>
-                                Löschen
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </td>
-                    {row.monthly_values.map((value, monthIdx) => (
-                      <td key={monthIdx} className="border-l p-0">
-                        <div
-                          ref={el => cellRefs.current[`${row.id}-${monthIdx}`] = el}
-                          contentEditable
-                          suppressContentEditableWarning
-                          onFocus={() => setEditingCell({ rowId: row.id, monthIndex: monthIdx })}
-                          onBlur={(e) => {
-                            const newValue = parseFloat(e.currentTarget.textContent || '0');
-                            updateCellValue(row.id, monthIdx, newValue);
-                          }}
-                          onKeyDown={(e) => handleCellKeyDown(e, row.id, monthIdx)}
-                          className="px-4 py-2 text-right cursor-text hover:bg-muted/50 focus:bg-primary/5 focus:outline-none min-h-[40px] flex items-center justify-end"
-                        >
-                          {value.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                        </div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-
-                {otherTotals.some(t => t > 0) && (
-                  <tr className="bg-gray-100/50 dark:bg-gray-900/20 font-semibold">
-                    <td className="sticky left-0 z-10 bg-gray-100/50 dark:bg-gray-900/20 px-4 py-2 border-r border-t">
-                      Gesamt Sonstiges
-                    </td>
-                    {otherTotals.map((total, idx) => (
-                      <td key={idx} className="px-4 py-2 text-right border-l border-t text-gray-700 dark:text-gray-400">
-                        {formatCurrency(total)}
-                      </td>
-                    ))}
-                  </tr>
+    <TooltipProvider>
+      <div className="h-full flex flex-col bg-background">
+        {/* Sticky Header with KPI Bar */}
+        <div className="sticky top-0 z-40 p-6 border-b bg-card/95 backdrop-blur-sm supports-[backdrop-filter]:bg-card/60 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-3xl font-bold">Cashplanung</h1>
+              <p className="text-muted-foreground flex items-center gap-2">
+                24-Monats-Finanzplanung mit Live-KPIs
+                {isSaving && (
+                  <span className="text-xs text-primary animate-pulse">● Speichert...</span>
                 )}
-
-                {/* Final Totals */}
-                <tr className="bg-primary/10 font-bold text-lg border-t-2">
-                  <td className="sticky left-0 z-10 bg-primary/10 px-4 py-3 border-r">
-                    Net-Cashflow
-                  </td>
-                  {netCashflow.map((cf, idx) => (
-                    <td key={idx} className={cn(
-                      "px-4 py-3 text-right border-l",
-                      cf >= 0 ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"
-                    )}>
-                      {formatCurrency(cf)}
-                    </td>
+              </p>
+            </div>
+            <div className="w-72">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Business Case</Label>
+              <Select value={selectedBusinessCaseId} onValueChange={setSelectedBusinessCaseId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {businessCases.map(bc => (
+                    <SelectItem key={bc.id} value={bc.id}>{bc.name}</SelectItem>
                   ))}
-                </tr>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-                <tr className="bg-primary/20 font-bold text-lg">
-                  <td className="sticky left-0 z-10 bg-primary/20 px-4 py-3 border-r">
-                    Cash-Bestand
-                  </td>
-                  {cashBalance.map((balance, idx) => (
-                    <td key={idx} className={cn(
-                      "px-4 py-3 text-right border-l",
-                      balance >= 0 ? "text-blue-700 dark:text-blue-400" : "text-red-700 dark:text-red-400"
-                    )}>
-                      {formatCurrency(balance)}
+          {/* KPI Cards */}
+          <div className="grid grid-cols-5 gap-3">
+            <Card className="border-l-4 border-l-success shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <TrendingUp className="h-4 w-4 text-success" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Umsatz</span>
+                </div>
+                <div className="text-2xl font-bold text-success">
+                  {formatCurrency(revenueTotals[selectedMonth] || 0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-l-4 border-l-destructive shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <TrendingDown className="h-4 w-4 text-destructive" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Kosten</span>
+                </div>
+                <div className="text-2xl font-bold text-destructive">
+                  {formatCurrency((costTotals[selectedMonth] || 0) + (headcountTotals[selectedMonth] || 0) + (otherTotals[selectedMonth] || 0))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-l-4 border-l-primary shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <BarChart3 className="h-4 w-4 text-primary" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Net-Cashflow</span>
+                </div>
+                <div className={cn(
+                  "text-2xl font-bold",
+                  (netCashflow[selectedMonth] || 0) >= 0 ? "text-success" : "text-destructive"
+                )}>
+                  {formatCurrency(netCashflow[selectedMonth] || 0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-l-4 border-l-primary-light shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Wallet className="h-4 w-4 text-primary-light" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Cash-Bestand</span>
+                </div>
+                <div className={cn(
+                  "text-2xl font-bold",
+                  (cashBalance[selectedMonth] || 0) >= 0 ? "text-primary-light" : "text-destructive"
+                )}>
+                  {formatCurrency(cashBalance[selectedMonth] || 0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-l-4 border-l-warning shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <TrendingUp className="h-4 w-4 text-warning" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Runway</span>
+                </div>
+                <div className="text-2xl font-bold text-warning">
+                  {runway === Infinity ? '∞' : `${runway}M`}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Scrollable Table Area */}
+        <div className="flex-1 overflow-auto p-6">
+          <div className="inline-block min-w-full">
+            <div className="overflow-x-auto border rounded-lg bg-card shadow-sm">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 z-20 bg-muted/80 backdrop-blur-sm">
+                  <tr>
+                    <th className="sticky left-0 z-30 bg-muted/80 backdrop-blur-sm px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide border-b border-r text-muted-foreground">
+                      Kategorie / Zeile
+                    </th>
+                    {Array.from({ length: 24 }, (_, i) => {
+                      const date = getMonthDate(i);
+                      return (
+                        <th
+                          key={i}
+                          onClick={() => setSelectedMonth(i)}
+                          className={cn(
+                            "px-3 py-3 text-center font-medium border-b border-r border-border/40 cursor-pointer transition-all duration-200 min-w-[100px]",
+                            selectedMonth === i 
+                              ? "bg-primary/10 text-primary shadow-sm" 
+                              : "hover:bg-muted/60"
+                          )}
+                        >
+                          <div className="text-xs text-muted-foreground font-normal">{date.getFullYear()}</div>
+                          <div className="text-sm">{getMonthName(date.getMonth())}</div>
+                        </th>
+                      );
+                    })}
+                    <th className="px-3 py-3 text-center font-medium border-b border-l-2 bg-muted/80 min-w-[120px]">
+                      <div className="text-xs text-muted-foreground font-normal">Summe</div>
+                      <div className="text-sm">Jahr 1</div>
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {renderCategoryRows('revenue', 'Umsätze', 'bg-success/5')}
+                  {renderCategoryRows('cost', 'Kosten', 'bg-destructive/5')}
+                  {renderCategoryRows('headcount', 'Personal', 'bg-primary/5')}
+                  {renderCategoryRows('other', 'Sonstiges', 'bg-muted/30')}
+
+                  {/* Final Totals */}
+                  <tr className="bg-primary/10 font-bold text-base border-t-2">
+                    <td className="sticky left-0 z-10 bg-primary/10 px-4 py-3 border-r">
+                      Net-Cashflow
                     </td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
+                    {netCashflow.map((cf, idx) => (
+                      <td key={idx} className={cn(
+                        "px-3 py-3 text-right text-sm border-r border-border/40",
+                        cf >= 0 ? "text-success" : "text-destructive"
+                      )}>
+                        {formatCurrency(cf)}
+                      </td>
+                    ))}
+                    <td className={cn(
+                      "px-3 py-3 text-right text-sm font-bold border-l-2",
+                      calculateYearTotal(netCashflow) >= 0 ? "text-success" : "text-destructive"
+                    )}>
+                      {formatCurrency(calculateYearTotal(netCashflow))}
+                    </td>
+                  </tr>
+
+                  <tr className="bg-primary/20 font-bold text-base border-t">
+                    <td className="sticky left-0 z-10 bg-primary/20 px-4 py-3 border-r">
+                      Cash-Bestand
+                    </td>
+                    {cashBalance.map((bal, idx) => (
+                      <td key={idx} className={cn(
+                        "px-3 py-3 text-right text-sm border-r border-border/40",
+                        bal >= 0 ? "text-primary-light" : "text-destructive"
+                      )}>
+                        {formatCurrency(bal)}
+                      </td>
+                    ))}
+                    <td className="px-3 py-3 text-right text-sm font-bold border-l-2 text-muted-foreground">
+                      -
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
