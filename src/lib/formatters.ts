@@ -62,3 +62,10 @@ export function getMonthName(monthIndex: number): string {
   const months = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
   return months[monthIndex] || '';
 }
+
+/**
+ * Formats a number as currency (alias for formatEuro)
+ */
+export function formatCurrency(value: number): string {
+  return formatEuro(value);
+}
